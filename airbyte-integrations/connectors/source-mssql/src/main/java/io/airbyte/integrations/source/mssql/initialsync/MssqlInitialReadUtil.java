@@ -4,6 +4,7 @@
 
 package io.airbyte.integrations.source.mssql.initialsync;
 
+import static io.airbyte.cdk.integrations.debezium.internals.mssql.MssqlCdcStateConstants.MSSQL_CDC_OFFSET;
 import static io.airbyte.integrations.source.mssql.MssqlCdcHelper.getDebeziumProperties;
 import static io.airbyte.integrations.source.mssql.MssqlQueryUtils.getTableSizeInfoForStreams;
 import static io.airbyte.integrations.source.mssql.MssqlQueryUtils.prettyPrintConfiguredAirbyteStreamList;
@@ -105,20 +106,15 @@ public class MssqlInitialReadUtil {
             ? initialDebeziumState
             : Jsons.clone(stateManager.getCdcStateManager().getCdcState().getState());
 
-    /*
-     * final Optional<MysqlDebeziumStateAttributes> savedOffset = mySqlDebeziumStateUtil.savedOffset(
-     * MySqlCdcProperties.getDebeziumProperties(database), catalog, state.get(MYSQL_CDC_OFFSET),
-     * sourceConfig);
-     *
-     * final boolean savedOffsetStillPresentOnServer = savedOffset.isPresent() &&
-     * mySqlDebeziumStateUtil.savedOffsetStillPresentOnServer(database, savedOffset.get());
-     *
-     * if (!savedOffsetStillPresentOnServer) { LOGGER.
-     * warn("Saved offset no longer present on the server, Airbyte is going to trigger a sync from scratch"
-     * ); }
-     *
-     */
-    final boolean savedOffsetStillPresentOnServer = true; // TEMP
+    final Optional<MssqlDebeziumStateAttributes> savedOffset = mssqlDebeziumStateUtil.savedOffset(
+        getDebeziumProperties(database, catalog, true), catalog, state.get(MSSQL_CDC_OFFSET), sourceConfig);
+    final boolean savedOffsetStillPresentOnServer =
+        savedOffset.isPresent() && mssqlDebeziumStateUtil.savedOffsetStillPresentOnServer(database, savedOffset.get());
+
+    if (!savedOffsetStillPresentOnServer) {
+      LOGGER.warn("Saved offset no longer present on the server, Airbyte is going to trigger a sync from scratch");
+    }
+
     final InitialLoadStreams initialLoadStreams =
         cdcStreamsForInitialOrderedCoumnLoad(stateManager.getCdcStateManager(), catalog, savedOffsetStillPresentOnServer);
     final CdcState stateToBeUsed = (!savedOffsetStillPresentOnServer || (stateManager.getCdcStateManager().getCdcState() == null
@@ -170,7 +166,7 @@ public class MssqlInitialReadUtil {
         getDebeziumProperties(database, catalog, false),
         DebeziumConnectorType.RELATIONALDB,
         emittedAt,
-        true); // TODO: check why add db name to state
+        true);
 
     // This starts processing the transaction logs as soon as initial sync is complete,
     // this is a bit different from the current cdc syncs.

@@ -52,8 +52,8 @@ public class MssqlCdcConnectorMetadataInjector implements CdcMetadataInjector<Ms
                                                       final String transactionTimestamp,
                                                       final MssqlDebeziumStateAttributes debeziumStateAttributes) {
     record.put(CDC_UPDATED_AT, transactionTimestamp);
-    record.put(CDC_EVENT_SERIAL_NO, 1); // TEMP
-    record.put(CDC_LSN, debeziumStateAttributes.lsn().toString()); // TODO: check here
+    record.put(CDC_EVENT_SERIAL_NO, 1);
+    record.put(CDC_LSN, debeziumStateAttributes.lsn().toString());
     record.put(CDC_DELETED_AT, (String) null);
     record.put(CDC_DEFAULT_CURSOR, getCdcDefaultCursor());
   }

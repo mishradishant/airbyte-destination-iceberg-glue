@@ -3,6 +3,7 @@
  */
 
 package io.airbyte.cdk.integrations.debezium.internals.mssql;
+import static io.debezium.relational.RelationalDatabaseConnectorConfig.DATABASE_NAME;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.annotations.VisibleForTesting;
@@ -13,27 +14,54 @@ import io.airbyte.cdk.integrations.debezium.internals.AirbyteSchemaHistoryStorag
 import io.airbyte.cdk.integrations.debezium.internals.AirbyteSchemaHistoryStorage.SchemaHistory;
 import io.airbyte.cdk.integrations.debezium.internals.DebeziumPropertiesManager;
 import io.airbyte.cdk.integrations.debezium.internals.DebeziumRecordPublisher;
+import io.airbyte.cdk.integrations.debezium.internals.DebeziumStateUtil;
+import io.airbyte.cdk.integrations.debezium.internals.RelationalDbDebeziumPropertiesManager;
 import io.airbyte.commons.json.Jsons;
 import io.airbyte.protocol.models.v0.ConfiguredAirbyteCatalog;
+import io.debezium.config.Configuration;
+import io.debezium.connector.common.OffsetReader;
 import io.debezium.connector.sqlserver.Lsn;
+import io.debezium.connector.sqlserver.SqlServerConnectorConfig;
+import io.debezium.connector.sqlserver.SqlServerOffsetContext;
+import io.debezium.connector.sqlserver.SqlServerOffsetContext.Loader;
+import io.debezium.connector.sqlserver.SqlServerPartition;
 import io.debezium.engine.ChangeEvent;
+import io.debezium.pipeline.spi.Offsets;
+import io.debezium.pipeline.spi.Partition;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
+import org.apache.kafka.connect.storage.FileOffsetBackingStore;
+import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
 import org.codehaus.plexus.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class MssqlDebeziumStateUtil {
+public class MssqlDebeziumStateUtil implements DebeziumStateUtil {
+  final static String LSN_OFFSET_INCLUDED_QUERY = """
+    DECLARE @saved_lsn BINARY(10), @min_lsn BINARY(10), @max_lsn BINARY(10), @res BIT
+    -- Set @saved_lsn = 0x0000DF7C000006A80006
+    Set @saved_lsn = ?
+    SELECT @min_lsn = MIN(start_lsn) FROM cdc.change_tables
+    SELECT @max_lsn = sys.fn_cdc_get_max_lsn()
+    IF (@saved_lsn >= @min_lsn)
+        Set @res = 1
+    ELSE
+        Set @res = 0
+    select @res as [included], @MIN_LSN as [min], @MAX_LSN as [max]
+""";
   private static final Logger LOGGER = LoggerFactory.getLogger(MssqlDebeziumStateUtil.class);
 
   /**
@@ -159,4 +187,94 @@ public class MssqlDebeziumStateUtil {
     return jsonNode;
   }
 
+  public Optional<MssqlDebeziumStateAttributes> savedOffset(final Properties baseProperties,
+                                                            final ConfiguredAirbyteCatalog catalog,
+                                                            final JsonNode cdcOffset,
+                                                            final JsonNode config) {
+    if (Objects.isNull(cdcOffset)) {
+      return Optional.empty();
+    }
+
+    final DebeziumPropertiesManager debeziumPropertiesManager = new RelationalDbDebeziumPropertiesManager(baseProperties, config, catalog,
+        AirbyteFileOffsetBackingStore.initializeState(cdcOffset, Optional.empty()),
+        Optional.empty());
+    final Properties debeziumProperties = debeziumPropertiesManager.getDebeziumProperties();
+    return parseSavedOffset(debeziumProperties);
+  }
+
+  private Optional<MssqlDebeziumStateAttributes> parseSavedOffset(final Properties properties) {
+    FileOffsetBackingStore fileOffsetBackingStore = null;
+    OffsetStorageReaderImpl offsetStorageReader = null;
+
+    try {
+      fileOffsetBackingStore = getFileOffsetBackingStore(properties);
+      offsetStorageReader = getOffsetStorageReader(fileOffsetBackingStore, properties);
+
+      final SqlServerConnectorConfig connectorConfig = new SqlServerConnectorConfig(Configuration.from(properties));
+      final SqlServerOffsetContext.Loader loader = new Loader(connectorConfig);
+      final Set<Partition> partitions =
+          Collections.singleton(new SqlServerPartition(connectorConfig.getLogicalName(), properties.getProperty(DATABASE_NAME.name())));
+      final OffsetReader<Partition, SqlServerOffsetContext, Loader> offsetReader = new OffsetReader<>(offsetStorageReader, loader);
+      final Map<Partition, SqlServerOffsetContext> offsets = offsetReader.offsets(partitions);
+      return extractStateAttributes(partitions, offsets);
+    } finally {
+      LOGGER.info("Closing offsetStorageReader and fileOffsetBackingStore");
+      if (offsetStorageReader != null) {
+        offsetStorageReader.close();
+      }
+
+      if (fileOffsetBackingStore != null) {
+        fileOffsetBackingStore.stop();
+      }
+
+    }
+  }
+
+  private Optional<MssqlDebeziumStateAttributes> extractStateAttributes(final Set<Partition> partitions,
+                                                                        final Map<Partition, SqlServerOffsetContext> offsets) {
+    boolean found = false;
+    for (final Partition partition : partitions) {
+      final SqlServerOffsetContext mssqlOffsetContext = offsets.get(partition);
+
+      if (mssqlOffsetContext != null) {
+        found = true;
+        LOGGER.info("Found previous partition offset {}: {}", partition, mssqlOffsetContext.getOffset());
+      }
+    }
+
+    if (!found) {
+      LOGGER.info("No previous offsets found");
+      return Optional.empty();
+    }
+
+    final Offsets<Partition, SqlServerOffsetContext> of = Offsets.of(offsets);
+    final SqlServerOffsetContext previousOffset = of.getTheOnlyOffset();
+    return Optional.of(new MssqlDebeziumStateAttributes(previousOffset.getChangePosition().getCommitLsn()));
+  }
+
+  public boolean savedOffsetStillPresentOnServer(final JdbcDatabase database, final MssqlDebeziumStateAttributes savedState) {
+    final Lsn savedLsn = savedState.lsn();
+    try (final Stream<Boolean> stream = database.unsafeResultSetQuery(
+        connection -> {
+          PreparedStatement stmt = connection.prepareStatement(LSN_OFFSET_INCLUDED_QUERY);
+          stmt.setBytes(1, savedLsn.getBinary());
+          return stmt.executeQuery();
+        },
+        resultSet -> {
+          final byte[] minLsnBinary = resultSet.getBytes(2);
+          Lsn min_lsn = Lsn.valueOf(minLsnBinary);
+          final byte[] maxLsnBinary = resultSet.getBytes(3);
+          Lsn max_lsn = Lsn.valueOf(maxLsnBinary);
+          final Boolean included = resultSet.getBoolean(1);
+          LOGGER.info("{} lsn exists on server: [{}]. (min server lsn: {} max server lsn: {})", savedLsn.toString(), included, min_lsn.toString(), max_lsn.toString());
+          return included;
+        })) {
+      final List<Boolean> reses = stream.toList();
+      assert reses.size() == 1;
+
+      return reses.get(0);
+    } catch (final SQLException e) {
+      throw new RuntimeException(e);
+    }
+  }
 }
