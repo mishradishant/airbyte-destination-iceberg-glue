@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from glob import glob
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -42,21 +41,22 @@ class PipelineContext:
 
     PRODUCTION = bool(os.environ.get("PRODUCTION", False))  # Set this to True to enable production mode (e.g. to send PR comments)
 
-    DEFAULT_EXCLUDED_FILES = (
-        [".git", "airbyte-ci/connectors/pipelines/*"]
-        + glob("**/build", recursive=True)
-        + glob("**/.venv", recursive=True)
-        + glob("**/secrets", recursive=True)
-        + glob("**/__pycache__", recursive=True)
-        + glob("**/*.egg-info", recursive=True)
-        + glob("**/.vscode", recursive=True)
-        + glob("**/.pytest_cache", recursive=True)
-        + glob("**/.eggs", recursive=True)
-        + glob("**/.mypy_cache", recursive=True)
-        + glob("**/.DS_Store", recursive=True)
-        + glob("**/airbyte_ci_logs", recursive=True)
-        + glob("**/.gradle", recursive=True)
-    )
+    DEFAULT_EXCLUDED_FILES = [
+        ".git",
+        "airbyte-ci/connectors/pipelines/*",
+        "**/build",
+        "**/.venv",
+        "**/secrets",
+        "**/__pycache__",
+        "**/*.egg-info",
+        "**/.vscode",
+        "**/.pytest_cache",
+        "**/.eggs",
+        "**/.mypy_cache",
+        "**/.DS_Store",
+        "**/airbyte_ci_logs",
+        "**/.gradle",
+    ]
 
     def __init__(
         self,
