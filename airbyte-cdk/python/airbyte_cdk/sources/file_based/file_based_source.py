@@ -20,6 +20,7 @@ from airbyte_cdk.models import (
 )
 from airbyte_cdk.sources.concurrent_source.concurrent_source import ConcurrentSource
 from airbyte_cdk.sources.concurrent_source.concurrent_source_adapter import ConcurrentSourceAdapter
+from airbyte_cdk.sources.connector_state_manager import ConnectorStateManager
 from airbyte_cdk.sources.file_based.availability_strategy import AbstractFileBasedAvailabilityStrategy, DefaultFileBasedAvailabilityStrategy
 from airbyte_cdk.sources.file_based.config.abstract_file_based_spec import AbstractFileBasedSpec
 from airbyte_cdk.sources.file_based.config.file_based_stream_config import FileBasedStreamConfig, ValidationPolicy
@@ -31,12 +32,16 @@ from airbyte_cdk.sources.file_based.file_types.file_type_parser import FileTypeP
 from airbyte_cdk.sources.file_based.schema_validation_policies import DEFAULT_SCHEMA_VALIDATION_POLICIES, AbstractSchemaValidationPolicy
 from airbyte_cdk.sources.file_based.stream import AbstractFileBasedStream, DefaultFileBasedStream
 from airbyte_cdk.sources.file_based.stream.concurrent.adapters import FileBasedStreamFacade
-from airbyte_cdk.sources.file_based.stream.concurrent.cursor import FileBasedNoopCursor
+from airbyte_cdk.sources.file_based.stream.concurrent.cursor import (
+    AbstractConcurrentFileBasedCursor,
+    FileBasedConcurrentCursor,
+    FileBasedNoopCursor,
+)
 from airbyte_cdk.sources.file_based.stream.cursor import AbstractFileBasedCursor
-from airbyte_cdk.sources.file_based.stream.cursor.default_file_based_cursor import DefaultFileBasedCursor
 from airbyte_cdk.sources.message.repository import InMemoryMessageRepository, MessageRepository
 from airbyte_cdk.sources.source import TState
 from airbyte_cdk.sources.streams import Stream
+from airbyte_cdk.sources.streams.concurrent.cursor import CursorField
 from airbyte_cdk.utils.analytics_message import create_analytics_message
 from airbyte_cdk.utils.traced_exception import AirbyteTracedException
 from pydantic.error_wrappers import ValidationError
@@ -61,7 +66,7 @@ class FileBasedSource(ConcurrentSourceAdapter, ABC):
         discovery_policy: AbstractDiscoveryPolicy = DefaultDiscoveryPolicy(),
         parsers: Mapping[Type[Any], FileTypeParser] = default_parsers,
         validation_policies: Mapping[ValidationPolicy, AbstractSchemaValidationPolicy] = DEFAULT_SCHEMA_VALIDATION_POLICIES,
-        cursor_cls: Type[AbstractFileBasedCursor] = DefaultFileBasedCursor,
+        cursor_cls: Type[Union[AbstractConcurrentFileBasedCursor, AbstractFileBasedCursor]] = FileBasedConcurrentCursor,
     ):
         self.stream_reader = stream_reader
         self.spec_class = spec_class
@@ -141,13 +146,34 @@ class FileBasedSource(ConcurrentSourceAdapter, ABC):
 
         configured_streams: List[Stream] = []
 
+        state_manager = ConnectorStateManager(
+            stream_instance_map={s.name: s for s in file_based_streams},
+            state=self.state,
+        )
+
         for stream in file_based_streams:
             sync_mode = self._get_sync_mode_from_catalog(stream)
-            if sync_mode == SyncMode.full_refresh and hasattr(self, "_concurrency_level") and self._concurrency_level is not None:
-                configured_streams.append(FileBasedStreamFacade.create_from_stream(stream, self, self.logger, None, FileBasedNoopCursor()))
-            else:
-                configured_streams.append(stream)
+            state = state_manager.get_stream_state(stream.name, stream.namespace)
 
+            if sync_mode == SyncMode.full_refresh and hasattr(self, "_concurrency_level") and self._concurrency_level is not None:
+                cursor = FileBasedNoopCursor(stream.config)
+                stream = FileBasedStreamFacade.create_from_stream(stream, self, self.logger, None, cursor)
+            elif sync_mode == SyncMode.incremental and issubclass(self.cursor_cls, AbstractConcurrentFileBasedCursor):
+                cursor = self.cursor_cls(
+                    stream.config,
+                    stream.name,
+                    stream.namespace,
+                    state,
+                    self.message_repository,
+                    state_manager,
+                    CursorField(stream.cursor_field),
+                )
+                stream = FileBasedStreamFacade.create_from_stream(stream, self, self.logger, state, cursor)
+            else:
+                cursor = self.cursor_cls(stream.config)
+
+            stream.cursor = cursor
+            configured_streams.append(stream)
         return configured_streams
 
     def _get_file_based_streams(self, config: Mapping[str, Any]) -> List[AbstractFileBasedStream]:
@@ -166,7 +192,6 @@ class FileBasedSource(ConcurrentSourceAdapter, ABC):
                         discovery_policy=self.discovery_policy,
                         parsers=self.parsers,
                         validation_policy=self._validate_and_get_validation_policy(stream_config),
-                        cursor=self.cursor_cls(stream_config),
                         errors_collector=self.errors_collector,
                     )
                 )

@@ -7,6 +7,8 @@ import json
 import logging
 from functools import cache
 from typing import Any, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Union
 
 from airbyte_cdk.models import AirbyteStream, SyncMode
 from airbyte_cdk.sources import AbstractSource
@@ -19,6 +21,7 @@ from airbyte_cdk.sources.file_based.file_types.file_type_parser import FileTypeP
 from airbyte_cdk.sources.file_based.remote_file import RemoteFile
 from airbyte_cdk.sources.file_based.stream import AbstractFileBasedStream
 from airbyte_cdk.sources.file_based.stream.concurrent.cursor import FileBasedNoopCursor
+from airbyte_cdk.sources.file_based.stream.cursor import AbstractFileBasedCursor
 from airbyte_cdk.sources.file_based.types import StreamSlice
 from airbyte_cdk.sources.message import MessageRepository
 from airbyte_cdk.sources.streams.concurrent.default_stream import DefaultStream
@@ -29,6 +32,9 @@ from airbyte_cdk.sources.streams.concurrent.partitions.partition_generator impor
 from airbyte_cdk.sources.streams.concurrent.partitions.record import Record
 from airbyte_cdk.sources.utils.slice_logger import SliceLogger
 from deprecated.classic import deprecated
+
+if TYPE_CHECKING:
+    from airbyte_cdk.sources.file_based.stream.concurrent.cursor import AbstractConcurrentFileBasedCursor
 
 """
 This module contains adapters to help enabling concurrency on File-based Stream objects without needing to migrate to AbstractStream
@@ -44,13 +50,14 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
         source: AbstractSource,
         logger: logging.Logger,
         state: Optional[MutableMapping[str, Any]],
-        cursor: FileBasedNoopCursor,
+        cursor: AbstractFileBasedCursor,
     ) -> "FileBasedStreamFacade":
         """
         Create a ConcurrentStream from a FileBasedStream object.
         """
         pk = get_primary_key_from_stream(stream.primary_key)
         cursor_field = get_cursor_field_from_stream(stream)
+        stream.cursor = cursor
 
         if not source.message_repository:
             raise ValueError(
@@ -63,7 +70,7 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
                 partition_generator=FileBasedStreamPartitionGenerator(
                     stream,
                     message_repository,
-                    SyncMode.full_refresh if isinstance(cursor, FileBasedNoopCursor) else SyncMode.incremental,
+                    SyncMode.full_refresh if isinstance(cursor, AbstractFileBasedCursor) else SyncMode.incremental,
                     [cursor_field] if cursor_field is not None else None,
                     state,
                     cursor,
@@ -86,7 +93,7 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
         self,
         stream: DefaultStream,
         legacy_stream: AbstractFileBasedStream,
-        cursor: FileBasedNoopCursor,
+        cursor: AbstractFileBasedCursor,
         slice_logger: SliceLogger,
         logger: logging.Logger,
     ):
@@ -106,7 +113,30 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
     def name(self) -> str:
         return self._abstract_stream.name
 
+#     @property
+# <<<<<<< HEAD
+# ||||||| parent of cc845971c0d (File-based CDK: add option to make incremental syncs concurrent)
+#     def state(self) -> MutableMapping[str, Any]:
+#         raise NotImplementedError("This should not be called as part of the Concurrent CDK code. Please report the problem to Airbyte")
+#
+#     @state.setter
+#     def state(self, value: Mapping[str, Any]) -> None:
+#         if "state" in dir(self._legacy_stream):
+#             self._legacy_stream.state = value  # type: ignore  # validating `state` is attribute of stream using `if` above
+#
+#     @property
+# =======
+#     def state(self) -> MutableMapping[str, Any]:
+#         raise NotImplementedError("This should not be called as part of the Concurrent CDK code. Please report the problem to Airbyte")
+#
+#     @state.setter
+#     def state(self, value: Mapping[str, Any]) -> None:
+#         if "state" in dir(self._legacy_stream):
+#             self._legacy_stream.state = value  # type: ignore  # validating `state` is attribute of stream using `if` above
+#         self._cursor.set_initial_state(value)
+
     @property
+# >>>>>>> cc845971c0d (File-based CDK: add option to make incremental syncs concurrent)
     def availability_strategy(self) -> AbstractFileBasedAvailabilityStrategy:
         return self._legacy_stream.availability_strategy
 
@@ -146,7 +176,7 @@ class FileBasedStreamPartition(Partition):
         sync_mode: SyncMode,
         cursor_field: Optional[List[str]],
         state: Optional[MutableMapping[str, Any]],
-        cursor: FileBasedNoopCursor,
+        cursor: "AbstractConcurrentFileBasedCursor",
     ):
         self._stream = stream
         self._slice = _slice
@@ -221,7 +251,7 @@ class FileBasedStreamPartitionGenerator(PartitionGenerator):
         sync_mode: SyncMode,
         cursor_field: Optional[List[str]],
         state: Optional[MutableMapping[str, Any]],
-        cursor: FileBasedNoopCursor,
+        cursor: "AbstractConcurrentFileBasedCursor",
     ):
         self._stream = stream
         self._message_repository = message_repository
@@ -234,19 +264,19 @@ class FileBasedStreamPartitionGenerator(PartitionGenerator):
         pending_partitions = []
         for _slice in self._stream.stream_slices(sync_mode=self._sync_mode, cursor_field=self._cursor_field, stream_state=self._state):
             if _slice is not None:
-                pending_partitions.extend(
-                    [
+                for file in _slice.get("files", []):
+                    pending_partitions.append(
                         FileBasedStreamPartition(
                             self._stream,
-                            {"files": [copy.deepcopy(f)]},
+                            {"files": [copy.deepcopy(file)]},
                             self._message_repository,
                             self._sync_mode,
                             self._cursor_field,
                             self._state,
                             self._cursor,
                         )
-                        for f in _slice.get("files", [])
-                    ]
-                )
+                    )
         self._cursor.set_pending_partitions(pending_partitions)
+        if not pending_partitions:
+            self._cursor.emit_state_message()
         yield from pending_partitions
