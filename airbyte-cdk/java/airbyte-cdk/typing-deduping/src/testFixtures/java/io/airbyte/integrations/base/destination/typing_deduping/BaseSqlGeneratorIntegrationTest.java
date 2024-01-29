@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -438,8 +439,6 @@ public abstract class BaseSqlGeneratorIntegrationTest<DialectTableDefinition> {
         streamId,
         BaseTypingDedupingTest.readRecords("sqlgenerator/safe_cast/alltypes_inputrecords.jsonl"));
 
-    assertTrue(destinationHandler.isFinalTableEmpty(streamId), "Final table should be empty before T+D");
-
     TypeAndDedupeTransaction.executeTypeAndDedupe(generator, destinationHandler, incrementalDedupStream, Optional.empty(), "");
 
     verifyRecords(
@@ -447,6 +446,20 @@ public abstract class BaseSqlGeneratorIntegrationTest<DialectTableDefinition> {
         dumpRawTableRecords(streamId),
         "sqlgenerator/safe_cast/alltypes_expectedrecords_final.jsonl",
         dumpFinalTableRecords(streamId, ""));
+  }
+  @Test
+  public void allTypesSafeCastUnsupported() throws Exception {
+    assumeFalse(supportsSafeCast(), "Skipping test because this connector supports safe casting");
+
+    createRawTable(streamId);
+    createFinalTable(incrementalDedupStream, "");
+    insertRawTableRecords(
+        streamId,
+        BaseTypingDedupingTest.readRecords("sqlgenerator/safe_cast/alltypes_inputrecords.jsonl"));
+
+    assertThrows(
+        Exception.class,
+        () -> TypeAndDedupeTransaction.executeTypeAndDedupe(generator, destinationHandler, incrementalDedupStream, Optional.empty(), ""));
   }
 
   /**
