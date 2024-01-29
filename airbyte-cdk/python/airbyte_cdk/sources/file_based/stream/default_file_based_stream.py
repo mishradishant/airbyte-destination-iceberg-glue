@@ -57,7 +57,7 @@ class DefaultFileBasedStream(AbstractFileBasedStream, IncrementalMixin):
         self._cursor.set_initial_state(value)
 
     @property
-    def cursor(self) -> AbstractFileBasedCursor:
+    def cursor(self) -> Optional[AbstractFileBasedCursor]:
         return self._cursor
 
     @cursor.setter

@@ -24,6 +24,7 @@ from airbyte_cdk.sources.file_based.stream.concurrent.cursor import FileBasedNoo
 from airbyte_cdk.sources.file_based.stream.cursor import AbstractFileBasedCursor
 from airbyte_cdk.sources.file_based.types import StreamSlice
 from airbyte_cdk.sources.message import MessageRepository
+from airbyte_cdk.sources.streams.concurrent.abstract_stream_facade import AbstractStreamFacade
 from airbyte_cdk.sources.streams.concurrent.default_stream import DefaultStream
 from airbyte_cdk.sources.streams.concurrent.exceptions import ExceptionWithDisplayMessage
 from airbyte_cdk.sources.streams.concurrent.helpers import get_cursor_field_from_stream, get_primary_key_from_stream
@@ -32,6 +33,7 @@ from airbyte_cdk.sources.streams.concurrent.partitions.partition_generator impor
 from airbyte_cdk.sources.streams.concurrent.partitions.record import Record
 from airbyte_cdk.sources.utils.slice_logger import SliceLogger
 from deprecated.classic import deprecated
+
 
 if TYPE_CHECKING:
     from airbyte_cdk.sources.file_based.stream.concurrent.cursor import AbstractConcurrentFileBasedCursor
@@ -42,7 +44,7 @@ This module contains adapters to help enabling concurrency on File-based Stream 
 
 
 @deprecated("This class is experimental. Use at your own risk.")
-class FileBasedStreamFacade(AbstractFileBasedStream):
+class FileBasedStreamFacade(AbstractFileBasedStream, AbstractStreamFacade[DefaultStream]):
     @classmethod
     def create_from_stream(
         cls,
@@ -66,11 +68,11 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
 
         message_repository = source.message_repository
         return FileBasedStreamFacade(
-            DefaultStream(  # type: ignore
+            DefaultStream(
                 partition_generator=FileBasedStreamPartitionGenerator(
                     stream,
                     message_repository,
-                    SyncMode.full_refresh if isinstance(cursor, AbstractFileBasedCursor) else SyncMode.incremental,
+                    SyncMode.full_refresh if isinstance(cursor, FileBasedNoopCursor) else SyncMode.incremental,
                     [cursor_field] if cursor_field is not None else None,
                     state,
                     cursor,
@@ -113,30 +115,7 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
     def name(self) -> str:
         return self._abstract_stream.name
 
-#     @property
-# <<<<<<< HEAD
-# ||||||| parent of cc845971c0d (File-based CDK: add option to make incremental syncs concurrent)
-#     def state(self) -> MutableMapping[str, Any]:
-#         raise NotImplementedError("This should not be called as part of the Concurrent CDK code. Please report the problem to Airbyte")
-#
-#     @state.setter
-#     def state(self, value: Mapping[str, Any]) -> None:
-#         if "state" in dir(self._legacy_stream):
-#             self._legacy_stream.state = value  # type: ignore  # validating `state` is attribute of stream using `if` above
-#
-#     @property
-# =======
-#     def state(self) -> MutableMapping[str, Any]:
-#         raise NotImplementedError("This should not be called as part of the Concurrent CDK code. Please report the problem to Airbyte")
-#
-#     @state.setter
-#     def state(self, value: Mapping[str, Any]) -> None:
-#         if "state" in dir(self._legacy_stream):
-#             self._legacy_stream.state = value  # type: ignore  # validating `state` is attribute of stream using `if` above
-#         self._cursor.set_initial_state(value)
-
     @property
-# >>>>>>> cc845971c0d (File-based CDK: add option to make incremental syncs concurrent)
     def availability_strategy(self) -> AbstractFileBasedAvailabilityStrategy:
         return self._legacy_stream.availability_strategy
 
@@ -165,6 +144,9 @@ class FileBasedStreamFacade(AbstractFileBasedStream):
 
     def infer_schema(self, files: List[RemoteFile]) -> Mapping[str, Any]:
         return self._legacy_stream.infer_schema(files)
+
+    def get_underlying_stream(self) -> DefaultStream:
+        return self._abstract_stream
 
 
 class FileBasedStreamPartition(Partition):

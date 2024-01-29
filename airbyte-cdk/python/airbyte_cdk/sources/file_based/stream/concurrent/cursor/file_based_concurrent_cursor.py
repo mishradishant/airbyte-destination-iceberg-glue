@@ -73,13 +73,14 @@ class FileBasedConcurrentCursor(AbstractConcurrentFileBasedCursor):
                 raise RuntimeError("Expected pending partitions to be set but it was not. This is unexpected. Please contact Support.")
 
     def set_pending_partitions(self, partitions: List["FileBasedStreamPartition"]) -> None:
-        self._pending_files = {}
-        for partition in partitions:
-            _slice = partition.to_slice()
-            for k in _slice.keys():
-                if k in self._pending_files.keys():
-                    raise RuntimeError(f"Already found file {_slice} in pending files. This is unexpected. Please contact Support.")
-            self._pending_files.update(_slice)
+        with self._pending_files_lock:
+            self._pending_files = {}
+            for partition in partitions:
+                _slice = partition.to_slice()
+                for k in _slice.keys():
+                    if k in self._pending_files.keys():
+                        raise RuntimeError(f"Already found file {_slice} in pending files. This is unexpected. Please contact Support.")
+                self._pending_files.update(_slice)
 
     def _compute_prev_sync_cursor(self, value: Optional[StreamState]) -> Tuple[datetime, str]:
         if not value:
