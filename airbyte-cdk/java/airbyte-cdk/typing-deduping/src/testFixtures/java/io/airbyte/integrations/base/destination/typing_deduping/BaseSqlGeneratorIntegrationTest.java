@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.Streams;
@@ -147,6 +148,8 @@ public abstract class BaseSqlGeneratorIntegrationTest<DialectTableDefinition> {
 
   protected abstract void insertFinalTableRecords(boolean includeCdcDeletedAt, StreamId streamId, String suffix, List<JsonNode> records)
       throws Exception;
+
+  protected abstract boolean supportsSafeCast();
 
   /**
    * The two dump methods are defined identically as in {@link BaseTypingDedupingTest}, but with
@@ -424,6 +427,26 @@ public abstract class BaseSqlGeneratorIntegrationTest<DialectTableDefinition> {
         "sqlgenerator/alltypes_expectedrecords_final.jsonl",
         dumpFinalTableRecords(streamId, ""));
     assertFalse(destinationHandler.isFinalTableEmpty(streamId), "Final table should not be empty after T+D");
+  }
+  @Test
+  public void allTypesSafeCast() throws Exception {
+    assumeTrue(supportsSafeCast(), "Skipping test because this connector does not support safe casting");
+
+    createRawTable(streamId);
+    createFinalTable(incrementalDedupStream, "");
+    insertRawTableRecords(
+        streamId,
+        BaseTypingDedupingTest.readRecords("sqlgenerator/safe_cast/alltypes_inputrecords.jsonl"));
+
+    assertTrue(destinationHandler.isFinalTableEmpty(streamId), "Final table should be empty before T+D");
+
+    TypeAndDedupeTransaction.executeTypeAndDedupe(generator, destinationHandler, incrementalDedupStream, Optional.empty(), "");
+
+    verifyRecords(
+        "sqlgenerator/safe_cast/alltypes_expectedrecords_raw.jsonl",
+        dumpRawTableRecords(streamId),
+        "sqlgenerator/safe_cast/alltypes_expectedrecords_final.jsonl",
+        dumpFinalTableRecords(streamId, ""));
   }
 
   /**
