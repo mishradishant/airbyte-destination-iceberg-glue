@@ -77,6 +77,7 @@ public class IcebergCatalogConfigFactory {
       case HADOOP -> new HadoopCatalogConfig(catalogConfigJson);
       case JDBC -> new JdbcCatalogConfig(catalogConfigJson);
       case REST -> new RESTCatalogConfig(catalogConfigJson);
+      case GLUE -> new GlueCatalogConfig(catalogConfigJson);
       default -> throw new RuntimeException("Unexpected catalog config: " + catalogTypeStr);
     };
   }

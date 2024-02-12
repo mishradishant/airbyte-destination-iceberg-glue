@@ -95,7 +95,16 @@ public class IcebergConsumer extends CommitOnStateAirbyteMessageConsumer {
       final boolean isAppendMode = syncMode != DestinationSyncMode.OVERWRITE;
       AirbyteStreamNameNamespacePair nameNamespacePair = AirbyteStreamNameNamespacePair.fromAirbyteStream(stream.getStream());
       Integer flushBatchSize = catalogConfig.getFormatConfig().getFlushBatchSize();
-      WriteConfig writeConfig = new WriteConfig(namespace, streamName, isAppendMode, flushBatchSize);
+      WriteConfig writeConfig = new WriteConfig(IcebergConstants.CATALOG_NAME, namespace, streamName, isAppendMode, flushBatchSize);
+
+      log.info("Catalog Type is: " + catalogConfig.getClass().getSimpleName());
+      if(catalogConfig.getClass().getSimpleName().equals("GlueCatalogConfig")) {
+        log.info("Using catalog: " + IcebergConstants.GLUE_CATALOG_NAME);
+        writeConfig = new WriteConfig(IcebergConstants.GLUE_CATALOG_NAME, namespace, streamName, isAppendMode, flushBatchSize);
+      } else {
+        log.info("Using other catalog types apart from Glue");
+      }
+
       configs.put(nameNamespacePair, writeConfig);
       try {
         spark.sql("DROP TABLE IF EXISTS " + writeConfig.getFullTempTableName());

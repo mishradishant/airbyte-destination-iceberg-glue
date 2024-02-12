@@ -51,6 +51,7 @@ public class IcebergDestination extends BaseConnector implements Destination {
       // getting here means Iceberg catalog check success
       return new AirbyteConnectionStatus().withStatus(Status.SUCCEEDED);
     } catch (final Exception e) {
+      log.info("JsonNode config: "+ config);
       log.error("Exception attempting to access the Iceberg catalog: ", e);
       Throwable rootCause = getRootCause(e);
       String errMessage =
@@ -84,6 +85,8 @@ public class IcebergDestination extends BaseConnector implements Destination {
     sparkConfMap.forEach(sparkBuilder::config);
     SparkSession spark = sparkBuilder.getOrCreate();
 
+    log.info("Spark configuration: ");
+    log.info(sparkConfMap.toString());
     return new IcebergConsumer(spark, outputRecordCollector, catalog, icebergCatalogConfig);
   }
 

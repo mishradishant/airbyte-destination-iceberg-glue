@@ -14,6 +14,27 @@
         "description": "Catalog config of Iceberg.",
         "oneOf": [
           {
+            "title": "GlueCatalog: Use GlueCatalog",
+            "required": ["catalog_type", "database"],
+            "properties": {
+              "catalog_type": {
+                "title": "Catalog Type",
+                "type": "string",
+                "default": "Glue",
+                "enum": ["Glue"],
+                "order": 0
+              },
+              "database": {
+                "title": "Default database",
+                "description": "The default database tables are written to if the source does not specify a namespace. The usual value for this field is \"default\".",
+                "type": "string",
+                "default": "default",
+                "examples": ["default"],
+                "order": 2
+              }
+            }
+          },
+          {
             "title": "HiveCatalog: Use Apache Hive MetaStore",
             "required": ["catalog_type", "hive_thrift_uri"],
             "properties": {

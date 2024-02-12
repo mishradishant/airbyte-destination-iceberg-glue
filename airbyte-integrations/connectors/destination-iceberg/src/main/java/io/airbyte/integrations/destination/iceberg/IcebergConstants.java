@@ -30,6 +30,7 @@ public class IcebergConstants {
   public static final String REST_CATALOG_URI_CONFIG_KEY = "rest_uri";
   public static final String REST_CATALOG_CREDENTIAL_CONFIG_KEY = "rest_credential";
   public static final String REST_CATALOG_TOKEN_CONFIG_KEY = "rest_token";
+  public static final String GLUE_DATABASE_NAME = "default";
 
   /**
    * Storage Config keys
@@ -55,6 +56,7 @@ public class IcebergConstants {
    * default values
    */
   public static final String CATALOG_NAME = "iceberg";
+  public static final String GLUE_CATALOG_NAME = "glue_catalog";
   public static final String DEFAULT_DATABASE = "default";
 
 }
